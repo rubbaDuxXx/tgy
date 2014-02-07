@@ -80,6 +80,9 @@
 ;
 ; The following only works with avra or avrasm2.
 ; For avrasm32, just comment out all but the include you need.
+ ;.equ rb50a_esc = 1;
+ #define rb50a_esc
+ 
 #if defined(afro_esc)
 #include "afro.inc"		; AfroESC (ICP PWM, I2C, UART)
 #elif defined(afro2_esc)
@@ -422,7 +425,7 @@ eeprom_end:	.byte	1
 		reti		; t1ocb_int
 		rjmp t1ovfl_int	; t1ovfl_int
 		reti		; t0ovfl_int
-		reti		; spi_int
+		rjmp spi_stc_int	; spi_int
 		rjmp urxc_int	; urxc
 		reti		; udre
 		reti		; utxc
@@ -1242,6 +1245,31 @@ urxc_set_exit:	sts	motor_count, i_temp2
 urxc_exit:	out	SREG, i_sreg
 		reti
 	.endif
+;-----bko-----------------------------------------------------------------
+spi_stc_int:						; spi serial transmit complete interrupt
+	.if USE_SPI
+		in	i_sreg, SREG
+        lds i_temp1, timing_x           ; load timing_x.  very highest byte of timing
+        cpi i_temp1, 0x01               ; check if timing_x is very large (means low rpm)
+        brsh spi_stc_int_veryslow       ; branch to return slow number
+        lds i_temp1, timing_h
+        out SPDR, i_temp1			    ; send value out to parent
+        rjmp spi_stc_int_exit
+spi_stc_int_veryslow:
+        ldi i_temp1, 0xff;
+        out SPDR, i_temp1			; send value out to parent
+spi_stc_int_exit:
+		out	SREG, i_sreg
+    .endif
+		reti
+spi_init:							; spi port directions are set-up elsewhere based on PORTB definitions in tgy.inc
+	.if USE_SPI
+        ldi temp1, (1<<SPE) | (1<<SPIE)
+        out SPCR, temp1
+		ldi temp1, 0xff				; initialise value to return to master
+		out SPDR, i_temp1			; send value out to parent
+    .endif
+		ret
 ;-----bko-----------------------------------------------------------------
 ; beeper: timer0 is set to 1µs/count
 beep_f1:	ldi	temp2, 80
@@ -2533,6 +2561,11 @@ control_disarm:
 		.if USE_INT0 || USE_ICP
 		rcp_int_rising_edge temp1
 		rcp_int_enable temp1
+		.endif
+
+	; init outputs (spi)
+		.if USE_SPI
+		rcall	spi_init
 		.endif
 
 	; Wait for one of the input sources to give arming input
